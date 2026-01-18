@@ -42,6 +42,11 @@ ARDUINO_IP = "X.X.X.X" # Mettre l'adresse IP de l'Arduino, voir dans le Serial M
 
 Le site Web ne requiert pas de configuration particulière.
 
+# Schéma de montage
+![Schéma de montage](assets/schema.png)
+
 # Vidéo de démonstration
-<video src="video/demo.mp4" controls="controls" style="max-width: 100%;">
-</video>
+https://github.com/user-attachments/assets/e2e2f413-e6f0-4f66-9d13-1a7c279633c4
+
+
+
