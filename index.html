@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SALSA IoT Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Calendar Styles */
+        .rbc { background-color: white; }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+        
+        .day-cell { 
+            border: 1px solid #e5e7eb; 
+            border-radius: 0.5rem; 
+            min-height: 80px; 
+            padding: 4px; 
+            background: white; 
+            transition: all 0.2s;
+        }
+        .day-cell:hover { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border-color: #c084fc; }
+
+        .rbc-today { 
+            background-color: #eff6ff; /* blue-50 */
+            border: 2px solid #60a5fa; /* blue-400 */
+        }
+
+        .event-tag { cursor: pointer; transition: opacity 0.2s; }
+        .event-tag:hover { opacity: 0.7; }
+        
+        /* Window Animation */
+        .window-scene {
+            width: 300px; height: 200px;
+            margin: 0 auto;
+            position: relative;
+            perspective: 800px; 
+        }
+
+        /* Background*/
+        .window-view {
+            width: 100%; height: 180px; 
+            background: linear-gradient(to bottom, #87CEEB 60%, #4ade80 60%); 
+            border: 6px solid #374151; border-radius: 6px;
+            overflow: hidden;
+            display: flex; justify-content: center; items-align: center;
+            z-index: 0;
+        }
+
+        /* The Shutters*/
+        .shutter-3d {
+            width: 50%; height: 100%;
+            background: #8B4513; /* Wood Color */
+            /* Wood Texture */
+            background-image: repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0px, rgba(0,0,0,0.05) 2px, transparent 2px, transparent 10px);
+            border: 2px solid #5d2e0c;
+            position: absolute; top: 0;
+            transition: transform 3s ease-in-out; /* Slow movement */
+            transform-style: preserve-3d;
+            z-index: 10;
+        }
+        
+        /* Left Door - Hinged on Left */
+        .shutter-left {
+            left: 0;
+            transform-origin: left center; /* Pivot point */
+            border-right: 1px solid #3e1f08;
+        }
+        
+        /* Right Door - Hinged on Right */
+        .shutter-right {
+            right: 0;
+            transform-origin: right center; /* Pivot point */
+            border-left: 1px solid #3e1f08;
+        }
+
+        /* Z-Pattern Bracing (Wood decoration like the image) */
+        .shutter-brace {
+            position: absolute; top: 20px; bottom: 20px; left: 10px; right: 10px;
+            border-top: 4px solid rgba(0,0,0,0.2);
+            border-bottom: 4px solid rgba(0,0,0,0.2);
+        }
+        .shutter-brace::after {
+            content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.2);
+            height: 4px;
+            transform-origin: top left;
+            transform: rotate(28deg) translateY(10px); /* Diagonal line */
+        }
+
+        /*The Motors*/
+        .motor-box {
+            width: 40px; height: 20px;
+            background: #1f2937; /* Dark Grey */
+            border-radius: 4px;
+            position: absolute;
+            bottom: 0; /* Below the window frame */
+            z-index: 20;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .motor-left { left: -10px; }
+        .motor-right { right: -10px; }
+        
+        /* The arm connecting motor to door */
+        .motor-arm {
+            width: 50px; height: 4px; background: #9ca3af;
+            position: absolute; bottom: 10px;
+            transform-origin: bottom;
+            transition: all 3s ease-in-out;
+        }
+        .arm-left { left: 20px; transform: rotate(-10deg); }
+        .arm-right { right: 20px; transform: rotate(10deg); }
+
+        /* Real-time override */
+        .realtime-mode .shutter-3d, 
+        .realtime-mode .motor-arm {
+            transition: transform 0.1s linear !important;
+        }
+        
+        /* Real-time override class */
+        .realtime-mode .shutter-panel {
+            transition: width 0.1s linear !important;
+        }
+        
+        /* Alert Animation */
+        @keyframes flashRed { 0%, 100% { background-color: #fee2e2; } 50% { background-color: #ef4444; } }
+        .alert-mode { animation: flashRed 1s infinite; }
+    </style>
+</head>
+<body class="bg-stone-50 text-gray-800 font-sans">
+
+    <nav class="bg-green-700 text-white p-4 shadow-md sticky top-0 z-50">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <span class="text-2xl">💃</span>
+                <h1 class="text-xl font-bold tracking-wider">SALSA</h1>
+            </div>
+            <button id="connectBtn" onclick="promptForIP()" class="bg-white text-green-700 px-4 py-2 rounded-full font-bold text-sm hover:bg-green-100 transition shadow flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"></path></svg>
+                Se connecter aux volets
+            </button>
+            <div id="connectedBadge" class="hidden bg-green-900 text-green-100 px-3 py-1 rounded-full text-xs font-bold border border-green-400">
+                ● Connecté
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+        <div class="flex flex-col gap-6">
+            <div class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-green-600">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold text-gray-700">Centre de contrôle</h2>
+                    <label class="flex items-center cursor-pointer select-none">
+                        <span class="mr-2 text-sm font-bold text-gray-500 uppercase">MODE MANUEL</span>
+                        <div class="relative">
+                            <input type="checkbox" id="masterSwitch" class="sr-only peer" onchange="toggleManualMode()">
+                            
+                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                        </div>
+                    </label>
+                </div>
+                
+                <div id="visualContainer" class="bg-slate-50 p-6 rounded-xl mb-4 flex flex-col items-center border border-slate-200">
+                    
+                    <div class="window-scene">
+                        <div class="window-view">
+                            <div class="absolute inset-0 flex items-center justify-center pt+40">
+                                <span id="sunIcon" class="text-6xl filter drop-shadow-lg opacity-0 transition-opacity duration-1000">☀️</span>
+                            </div>
+                        </div>
+
+                        <div id="leftShutter" class="shutter-3d shutter-left">
+                            <div class="shutter-brace"></div>
+                        </div>
+                        <div class="motor-box motor-left"></div>
+                        <div id="leftArm" class="motor-arm arm-left"></div>
+
+                        <div id="rightShutter" class="shutter-3d shutter-right">
+                            <div class="shutter-brace"></div> 
+                        </div>
+                        <div class="motor-box motor-right"></div>
+                        <div id="rightArm" class="motor-arm arm-right"></div>
+                    </div>
+                    
+                    <p class="mt-8 font-semibold text-gray-600 text-lg" id="statusText">
+                        État : <span class="text-gray-800">INCONNU</span>
+                    </p>
+                    <p class="text-xs text-gray-400 font-mono mt-1" id="debugLog">En attente du serveur...</p>
+                </div>
+
+                <div id="obstacleAlert" class="hidden bg-red-500 text-white p-3 rounded-lg text-center font-bold animate-pulse mb-4">
+                    ⚠️ OBSTACLE DETECTED - STOPPING
+                </div>
+
+                <div class="grid grid-cols-1 gap-4">
+                    <button id="btnOpen" onclick="sendCommand('OUVRIR')" class="hidden bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg transition transform active:scale-95 flex flex-col items-center gap-1">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                        OUVRIR MAINTENANT
+                    </button>
+
+                    <button id="btnClose" onclick="sendCommand('FERMER')" class="hidden bg-gray-700 hover:bg-gray-800 text-white font-bold py-4 rounded-xl shadow-lg transition transform active:scale-95 flex flex-col items-center gap-1">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+                        FERMER MAINTENANT
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl shadow-md">
+                <h3 class="font-bold text-gray-500 text-sm uppercase mb-4 tracking-wide">Données en temps réel</h3>
+                <div class="grid grid-cols-4 gap-2 text-center divide-x divide-gray-100">
+                    <div onclick="handleUserLocation()" class="cursor-pointer hover:bg-gray-50 transition rounded" title="Click to search city or reset to GPS">
+                        <div id="cityName" class="text-sm font-bold text-purple-700 flex items-center justify-center h-7 overflow-hidden">
+                            ...
+                        </div>
+                        <div class="text-xs text-gray-500">Ville (Modifiable)</div>
+                    </div>
+                    <div>
+                        <div id="outdoorTemp" class="text-xl font-bold text-blue-600">--°C</div>
+                        <div class="text-xs text-blue-400">Météo</div>
+                    </div>
+                    <div>
+                        <div class="text-xl font-bold text-green-600">OK</div>
+                        <div class="text-xs text-green-500">Système</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl shadow-lg flex flex-col h-[850px]">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h2 class="text-xl font-bold text-purple-700">Calendrier</h2>
+                    <p class="text-sm text-gray-400" id="monthDisplay">Chargement...</p>
+                </div>
+                <button onclick="openModal()" class="bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-sm font-bold hover:bg-purple-200">+ Add</button>
+            </div>
+            
+            <div class="grid grid-cols-7 gap-1 text-center font-bold text-gray-400 text-xs mb-2">
+                <div>Lu</div><div>Ma</div><div>Me</div><div>Je</div><div>Ve</div><div>Sa</div><div>Di</div>
+            </div>
+            
+            <div class="calendar-grid overflow-y-auto pr-2 flex-grow min-h-[300px]" id="calendarGrid">
+                </div>
+
+            <div class="mt-4 pt-4 border-t border-gray-100">
+                <div class="mb-3 text-left">
+                    <span class="text-sm text-gray-500 mr-2">Horloge :</span>
+                    <span id="clock" class="font-mono font-bold text-gray-700 text-lg">--:--:--</span>
+                </div>
+                
+                <div class="mt-4 p-3 bg-red-50 rounded-xl border border-red-100">
+                     <h3 class="font-bold text-red-800 text-xs uppercase mb-2">⚙️ Configuration des volets</h3>
+                     <div class="flex items-center justify-between">
+                        <span class="text-xs text-gray-600">Orientation des moteurs</span>
+                        <span class="text-xs font-bold text-gray-800" id="configInverted">--</span>
+                        <button onclick="toggleInvert()" class="bg-red-600 text-white px-3 py-1 rounded text-xs">Inverser</button>
+                     </div>
+                </div>
+
+                <div class="mt-4 p-3 bg-purple-50 rounded-xl border border-purple-100">
+                    <h3 class="font-bold text-purple-800 text-xs uppercase mb-2 flex justify-between items-center">
+                        <span>📅 Routine</span>
+                    </h3>
+                    
+                    <div class="flex items-end gap-2">
+                        <div class="flex-1">
+                            <label class="text-[10px] text-gray-500 font-bold block mb-1">☀️ Ouvrir</label>
+                            <input type="time" id="quickOpenTime" value="08:00" class="w-full text-xs p-1.5 border border-gray-300 rounded focus:border-purple-500 outline-none bg-white">
+                        </div>
+                        
+                        <div class="flex-1">
+                            <label class="text-[10px] text-gray-500 font-bold block mb-1">🌙 Fermer</label>
+                            <input type="time" id="quickCloseTime" value="20:00" class="w-full text-xs p-1.5 border border-gray-300 rounded focus:border-purple-500 outline-none bg-white">
+                        </div>
+                        
+                        <button onclick="setMonthlySchedule()" class="bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-3 py-1.5 rounded shadow h-[28px] mb-[1px]">
+                            Appliquer au mois
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-100">
+                    <h3 class="font-bold text-blue-800 text-xs uppercase mb-2 flex justify-between items-center">
+                        <span>🌡️ Seuil de température</span>
+                    </h3>
+                    
+                    <div class="flex items-center justify-between gap-2">
+                        <!-- Min Temp  -->
+                        <div class="flex flex-col items-start">
+                            <label class="text-[10px] text-blue-500 font-bold uppercase">❄️ Min </label>
+                            <div class="flex items-center mt-1">
+                                <input type="number" id="minTempInput" value="5" class="w-14 border border-gray-300 rounded p-1 text-center text-sm focus:border-blue-500 outline-none">
+                                <span class="text-xs ml-1 text-gray-500">°C</span>
+                            </div>
+                        </div>
+
+
+                        <!-- Max Temp  -->
+                        <div class="flex flex-col items-end">
+                            <label class="text-[10px] text-red-500 font-bold uppercase">🔥 Max </label>
+                            <div class="flex items-center mt-1">
+                                <input type="number" id="maxTempInput" value="30" class="w-14 border border-gray-300 rounded p-1 text-center text-sm focus:border-red-500 outline-none">
+                                <span class="text-xs ml-1 text-gray-500">°C</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-center mt-3">
+                        <button onclick="applyTempSettings()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-6 py-1.5 rounded shadow mb-[1px]">
+                            Définir
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="modalOverlay" class="fixed inset-0 bg-black bg-opacity-50 hidden z-[100] flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold mb-4">Ajouter une programmation</h3>
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Date</label>
+                    <input type="date" id="inputDate" class="w-full border-2 border-slate-200 p-3 rounded-xl focus:border-purple-500 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Heure</label>
+                    <input type="time" id="inputTime" class="w-full border-2 border-slate-200 p-3 rounded-xl focus:border-purple-500 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Action</label>
+                    <select id="inputAction" class="w-full border-2 border-slate-200 p-3 rounded-xl bg-white">
+                        <option value="OUVRIR">☀️ Ouvrir les volets</option>
+                        <option value="FERMER">🌙 Fermer les volets</option>
+                    </select>
+                </div>
+            </div>
+            <div class="mt-6 flex gap-3">
+                <button onclick="closeModal()" class="flex-1 bg-gray-200 py-2 rounded">Annuler</button>
+                <button onclick="addEventToServer()" class="flex-1 bg-purple-600 text-white py-2 rounded">Appliquer</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let serverUrl = ""; 
+        let isConnected = false;
+        let isSimulatingOpen = false;
+
+        let lastUserActionTime = 0; 
+        const SYNC_COOLDOWN = 10000;
+
+        const today = new Date();
+        const CURRENT_MONTH = today.getMonth();
+        const CURRENT_YEAR = today.getFullYear();
+        
+        async function toggleManualMode() {
+            if(!isConnected) {
+                alert("Connectez-vous au serveur d'abord !");
+                document.getElementById('masterSwitch').checked = !document.getElementById('masterSwitch').checked;
+                return;
+            }
+
+            const isChecked = document.getElementById('masterSwitch').checked;
+            
+            console.log("Envoi du nouveau mode : " + (isChecked ? "MANUEL" : "AUTO"));
+
+            try {
+                await fetch(serverUrl + "/config/update", {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode_manuel: isChecked })
+                });
+                
+                document.getElementById('debugLog').innerText = "Mise à jour du mode : " + (isChecked ? "MANUEL" : "AUTO");
+                
+            } catch(e) {
+                console.error("Erreur update config", e);
+                alert("Erreur lors de la mise à jour du mode.");
+                document.getElementById('masterSwitch').checked = !isChecked;
+            }
+        }
+
+        function updateDateHeader() {
+            const options = { year: 'numeric', month: 'long' };
+            document.getElementById('monthDisplay').innerText = today.toLocaleDateString('en-US', options);
+            document.getElementById('inputDate').valueAsDate = new Date();
+        }
+        updateDateHeader();
+
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('clock').innerText = now.toLocaleTimeString('fr-FR');
+        }, 1000);
+
+        function promptForIP() {
+            let ip = prompt("Entrer l'adresse IP du serveur Python", "10.42.199.243:5000");
+            if (ip) {
+                if(!ip.startsWith("http")) ip = "http://" + ip;
+                serverUrl = ip;
+                checkConnection();
+            }
+        }
+
+        async function applyTempSettings() {
+        if(!isConnected) { 
+            alert("Connectez-vous au serveur Python d'abord !"); 
+            return; 
+        }
+
+        const minInput = document.getElementById('minTempInput');
+        const maxInput = document.getElementById('maxTempInput');
+        const btn = document.querySelector("button[onclick='applyTempSettings()']");
+
+        const minVal = parseFloat(minInput.value);
+        const maxVal = parseFloat(maxInput.value);
+
+        if (isNaN(minVal) || isNaN(maxVal)) {
+            alert("Veuillez entrer des chiffres valides.");
+            return;
+        }
+
+        if (minVal >= maxVal) {
+            alert("Erreur : La température Min doit être inférieure au Max !");
+            return;
+        }
+
+        const originalText = btn.innerText;
+        btn.innerText = "Sending...";
+        btn.classList.add("opacity-50", "cursor-not-allowed");
+
+        try {
+            const res = await fetch(serverUrl + "/config/update", {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    seuil_temp_min: minVal,
+                    seuil_temp_max: maxVal
+                })
+            });
+
+            if (res.ok) {
+                btn.innerText = "Sauvegardé";
+                btn.classList.replace("bg-blue-600", "bg-green-600");
+                
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                    btn.classList.replace("bg-green-600", "bg-blue-600");
+                    btn.classList.remove("opacity-50", "cursor-not-allowed");
+                }, 2000);
+            } else {
+                throw new Error("Server Error");
+            }
+
+        } catch (e) {
+            console.error(e);
+            alert("Erreur lors de la sauvegarde sur le serveur.");
+            btn.innerText = "Erreur ❌";
+        }
+    }
+
+        async function checkConnection() {
+            const logEl = document.getElementById('debugLog');
+            logEl.innerText = "Connecting to Python...";
+            
+            try {
+                const res = await fetch(serverUrl + "/config");
+                if(!res.ok) throw new Error("Server error");
+                const data = await res.json();
+                
+                isConnected = true;
+                document.getElementById('connectBtn').classList.add('hidden');
+                document.getElementById('connectedBadge').classList.remove('hidden');
+                document.getElementById('configInverted').innerText = data.inverser_ordre ? "Gauche à Droite" : "Droite à Gauche";
+                
+                logEl.innerText = "Connecté !";
+                
+                setInterval(pollServerData, 5000); 
+                
+                loadEventsFromServer();
+                
+            } catch (error) {
+                alert("Connexion échouée !\nEst-ce que le serveur Python tourne bien sur " + serverUrl + " ?");
+                logEl.innerText = "Connexion échouée";
+                isConnected = false;
+            }
+        }
+
+        async function sendCommand(action) {
+            if(!isConnected) { alert("Connectez-vous au serveur d'abord"); return; }
+            
+            try {
+                const res = await fetch(serverUrl + "/trigger", {
+                    method: 'GET',
+                });
+                const data = await res.json();
+                console.log("Command Sent:", data);
+                
+                lastUserActionTime = Date.now();
+
+                simulateVisuals(action === 'OUVRIR' ? 'O' : 'F');
+                document.getElementById('debugLog').innerText = "CMD Sent: " + action;
+                
+            } catch(e) {
+                console.error(e);
+                alert("Error sending command to Python.");
+            }
+        }
+
+        async function toggleInvert() {
+            if(!isConnected) return;
+            const currentTxt = document.getElementById('configInverted').innerText;
+            const newVal = (currentTxt.includes("Droite à Gauche")); 
+            
+            try {
+                await fetch(serverUrl + "/config/update", {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ inverser_ordre: newVal })
+                });
+                document.getElementById('configInverted').innerText = newVal ? "Gauche à Droite" : "Droite à Gauche";
+            } catch(e) { alert("Error updating config"); }
+        }
+
+        async function pollServerData() {
+            if(!isConnected) return;
+            
+            try {
+                const resMeteo = await fetch(serverUrl + "/meteo");
+                const dataMeteo = await resMeteo.json();
+                document.getElementById('outdoorTemp').innerText = dataMeteo.temp + "°C";
+
+
+                const resConfig = await fetch(serverUrl + "/config");
+                const dataConfig = await resConfig.json();
+
+                const timeSinceLastAction = Date.now() - lastUserActionTime;
+                if (timeSinceLastAction < SYNC_COOLDOWN) {
+                    console.log("Synchro ignorée (Mouvement en cours...)");
+                } else {
+                    const isOpened = dataConfig.is_opened;
+                    const currentStatus = document.getElementById('statusText').innerHTML;
+                    if(isOpened != currentStatus.includes("OUVERT") || currentStatus.includes("INCONNU")){
+                        simulateVisuals(dataConfig.is_opened ? "O" : "C")
+                    }
+                    updateButtonsVisibility();
+                }
+                
+                const switchEl = document.getElementById('masterSwitch');
+                
+                if (switchEl.checked !== dataConfig.mode_manuel) {
+                    console.log("Synchro externe : Le mode a changé (Arduino ou autre)");
+                    switchEl.checked = dataConfig.mode_manuel;
+                }
+
+                const minInput = document.getElementById('minTempInput');
+                const maxInput = document.getElementById('maxTempInput');
+                minInput.value = dataConfig.seuil_temp_min;
+                maxInput.value = dataConfig.seuil_temp_max
+
+                document.getElementById('configInverted').innerText = dataConfig.inverser_ordre ? "Gauche à Droite" : "Droite à Gauche";
+
+                document.getElementById('cityName').innerText = dataConfig.city;
+
+            } catch(e) {
+                console.log("Polling error (c'est normal si le serveur coupe)");
+            }
+        }
+
+        function initCalendarGrid() {
+            const grid = document.getElementById('calendarGrid');
+            grid.innerHTML = '';
+            
+            for(let i=1; i<=31; i++) {
+                const div = document.createElement('div');
+                div.className = "day-cell relative flex flex-col overflow-hidden";
+                div.id = `day-${i}`;
+                
+                const dateNum = document.createElement('span');
+                dateNum.className = "text-xs font-bold text-gray-400 ml-1 mb-1";
+                dateNum.innerText = i;
+                div.appendChild(dateNum);
+
+                if (i === today.getDate()) {
+                    div.classList.add('rbc-today');
+                    dateNum.classList.replace('text-gray-400', 'text-blue-600');
+                }
+                grid.appendChild(div);
+            }
+        }
+
+        async function loadEventsFromServer() {
+            initCalendarGrid(); 
+            
+            try {
+                const res = await fetch(serverUrl + "/planning/list");
+                const events = await res.json();
+                
+                events.forEach(evt => {
+                    const parts = evt.target_datetime.split(' ');
+                    const datePart = parts[0]; 
+                    const timePart = parts[1]; 
+                    
+                    const day = parseInt(datePart.split('-')[2]);
+                    const month = parseInt(datePart.split('-')[1]) - 1;
+                    
+                    if (month === CURRENT_MONTH) {
+                        renderEventTag(day, timePart, evt.action, evt.executed);
+                    }
+                });
+            } catch(e) {
+                console.log("Error loading events", e);
+            }
+        }
+
+        function renderEventTag(day, time, action, isExecuted) {
+            const cell = document.getElementById(`day-${day}`);
+            if(!cell) return;
+            
+            const tag = document.createElement('div');
+            const isO = (action === 'OUVRIR');
+            
+            let colorClass = isO ? 'bg-green-100 text-green-800 border-green-200' : 'bg-gray-100 text-gray-800 border-gray-200';
+            if(isExecuted) colorClass = 'bg-slate-200 text-slate-400 border-slate-300 line-through';
+
+            tag.className = `event-tag mt-1 mx-1 text-[10px] p-1 rounded border truncate ${colorClass}`;
+            tag.innerHTML = `<strong>${time}</strong> ${isO ? 'OPN' : 'CLS'}`;
+            
+            cell.appendChild(tag);
+        }
+
+        async function addEventToServer() {
+            const d = document.getElementById('inputDate').value;
+            const t = document.getElementById('inputTime').value;
+            const a = document.getElementById('inputAction').value;
+            
+            if(!d || !t) { alert("Invalid date/time"); return; }
+            
+            try {
+                await fetch(serverUrl + "/planning/add", {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        date: d,
+                        time: t,
+                        action: a
+                    })
+                });
+                closeModal();
+                loadEventsFromServer(); 
+            } catch(e) {
+                alert("Failed to save event to server");
+            }
+        }
+
+        async function setMonthlySchedule() {
+            if(!isConnected) { 
+                alert("Veuillez vous connecter au serveur d'abord."); 
+                return; 
+            }
+
+            const openTime = document.getElementById('quickOpenTime').value;
+            const closeTime = document.getElementById('quickCloseTime').value;
+            const btn = document.querySelector("button[onclick='setMonthlySchedule()']");
+
+            if (!openTime && !closeTime) {
+                alert("Veuillez choisir au moins une heure (Ouverture ou Fermeture).");
+                return;
+            }
+
+            if(!confirm("Cela va programmer les volets pour tous les jours restants de ce mois. Continuer ?")) {
+                return;
+            }
+
+            try {
+                await fetch(serverUrl + "/planning/clear_future", { method: 'POST' });
+            } catch(e) { console.log("Pas de nettoyage (endpoint non trouvé ?)"); }
+
+            const originalText = btn.innerText;
+            btn.innerText = "Processing...";
+            btn.classList.add("opacity-50", "cursor-not-allowed");
+
+            const today = new Date();
+            const currentYear = today.getFullYear();
+            const currentMonth = today.getMonth(); 
+            const currentDay = today.getDate();
+            
+            const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+
+            try {
+                for (let d = currentDay; d <= lastDayOfMonth; d++) {
+                    
+                    const dayStr = d < 10 ? '0' + d : d;
+                    const monthStr = (currentMonth + 1) < 10 ? '0' + (currentMonth + 1) : (currentMonth + 1);
+                    const dateString = `${currentYear}-${monthStr}-${dayStr}`;
+
+                    if (openTime) {
+                        await sendEventToServer(dateString, openTime, "OUVRIR");
+                    }
+
+                    if (closeTime) {
+                        await sendEventToServer(dateString, closeTime, "FERMER");
+                    }
+                }
+
+                alert("Programmation terminée pour ce mois !");
+                loadEventsFromServer(); 
+
+            } catch (e) {
+                console.error(e);
+                alert("Une erreur est survenue pendant la programmation.");
+            } finally {
+                btn.innerText = originalText;
+                btn.classList.remove("opacity-50", "cursor-not-allowed");
+            }
+        }
+
+        async function handleUserLocation() {
+            if(!isConnected) { alert("Connectez-vous au serveur d'abord"); return; }
+
+            const input = prompt("Entrez le nom de votre ville (ex: Paris, Lyon...) :");
+            
+            if (input && input.trim() !== "") {
+                const cityEl = document.getElementById('cityName');
+                cityEl.innerText = "Sauvegarde...";
+                
+                try {
+                    await fetch(serverUrl + "/config/update", {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ city: input })
+                    });
+                    
+                    document.getElementById('cityName').innerText = input;
+                    
+                    document.getElementById('outdoorTemp').innerText = "--"; 
+                    
+                    alert("Ville changée ! La météo va se mettre à jour.");
+                    
+                } catch(e) {
+                    alert("Erreur lors de la sauvegarde de la ville.");
+                }
+            }
+        }
+
+        async function sendEventToServer(date, time, action) {
+            await fetch(serverUrl + "/planning/add", {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    date: date,
+                    time: time,
+                    action: action
+                })
+            });
+        }
+
+        function updateButtonsVisibility() {
+            const statusText = document.getElementById('statusText').innerText.toUpperCase();
+            const btnOpen = document.getElementById('btnOpen');
+            const btnClose = document.getElementById('btnClose');
+
+            if (statusText.includes("OUV")) {
+                btnOpen.classList.add('hidden');
+                btnClose.classList.remove('hidden');
+            } else {
+                btnClose.classList.add('hidden');
+                btnOpen.classList.remove('hidden');
+            }
+        }
+
+        function simulateVisuals(type) {
+            const left = document.getElementById('leftShutter');
+            const right = document.getElementById('rightShutter');
+            const sun = document.getElementById('sunIcon');
+            const leftArm = document.getElementById('leftArm');
+            const rightArm = document.getElementById('rightArm');
+            
+            const isOpen = (type === 'O');
+            
+            document.getElementById('statusText').innerHTML = `État : <span class="${isOpen ? 'text-green-600' : 'text-gray-800'} font-bold">${isOpen ? 'OUVERTURE...' : 'FERMETURE...'}</span>`;
+
+            leftArm.style.transform = isOpen ? 'rotate(40deg)' : 'rotate(-10deg)';
+            rightArm.style.transform = isOpen ? 'rotate(-40deg)' : 'rotate(10deg)';
+            
+            left.style.transform = isOpen ? 'rotateY(-160deg)' : 'rotateY(0deg)';
+            right.style.transform = isOpen ? 'rotateY(160deg)' : 'rotateY(0deg)';
+            
+            sun.style.opacity = isOpen ? '1' : '0';
+
+            setTimeout(updateButtonsVisibility, 100);
+
+            setTimeout(() => {
+                document.getElementById('statusText').innerHTML = `Status: <span class="${isOpen ? 'text-green-600' : 'text-gray-800'} font-bold">${isOpen ? 'OUVERT' : 'FERMÉ'}</span>`;
+                updateButtonsVisibility();
+            }, 3000);
+        }
+
+        function openModal() { document.getElementById('modalOverlay').classList.remove('hidden'); }
+        function closeModal() { document.getElementById('modalOverlay').classList.add('hidden'); }
+        
+        initCalendarGrid();
+    </script>
+</body>
+</html>
